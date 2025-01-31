@@ -6,6 +6,9 @@ telemetry = false
 requirements = []
 cache_dir = "/home/runner/workspace/infrachaindao/./.requirements"
 boot_contracts = ["pox", "costs-v2", "bns"]
+[contracts.ContractorRegistry]
+path = "contracts/ContractorRegistry.clar"
+
 [contracts.InfraChainDAO]
 path = "contracts/InfraChainDAO.clar"
 
