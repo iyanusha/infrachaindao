@@ -112,6 +112,7 @@
     (job-id uint))
     (let ((job (unwrap-panic (get-maintenance-job job-id))))
         (asserts! (is-job-complete job) ERR-INVALID-DATA)
+        (asserts! (verify-job-completion job-id) ERR-INVALID-DATA)
         (ok (stx-transfer? 
             (get payment-amount job)
             tx-sender
@@ -121,6 +122,27 @@
 (define-private (is-valid-sensor (sensor principal) (asset-id uint))
     (let ((asset (unwrap-panic (get-asset asset-id))))
         (is-eq sensor (get owner asset))))
+
+(define-private (is-job-complete (job {
+        asset-id: uint,
+        contractor: principal,
+        start-time: uint,
+        end-time: uint,
+        status: (string-utf8 20),
+        payment-amount: uint
+    }))
+    (and 
+        (is-eq (get status job) "completed")
+        (> (get end-time job) (get start-time job))
+        (> (get payment-amount job) u0)))
+
+(define-private (verify-job-completion (job-id uint))
+    (let ((job (unwrap-panic (get-maintenance-job job-id))))
+        (and
+            (is-eq (get status job) "completed")
+            (>= block-height (+ (get start-time job) u100))  ;; Minimum time check
+            (< block-height (+ (get end-time job) u10000))   ;; Maximum time check
+            (> (get payment-amount job) u0))))
 
 (define-private (create-maintenance-job (asset-id uint) (contractor principal))
     (let ((job-id (+ (var-get current-job-id) u1)))
