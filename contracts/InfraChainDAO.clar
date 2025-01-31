@@ -1,173 +1,150 @@
-;; InfraChainDAO - Core Smart Contract Architecture
+;; InfraChainDAO - IoT-Driven Predictive Maintenance
+;; Manages infrastructure maintenance through IoT sensor data and automated payments
 
 ;; Constants and Error Codes
+(define-constant CONTRACT-OWNER tx-sender)
 (define-constant ERR-NOT-AUTHORIZED (err u401))
 (define-constant ERR-ASSET-NOT-FOUND (err u404))
 (define-constant ERR-INVALID-DATA (err u400))
+(define-constant ERR-ALREADY-EXISTS (err u409))
+
+;; Asset and Job Status Constants
+(define-constant ACTIVE "active")
+(define-constant MAINTENANCE "maintenance")
+(define-constant COMPLETED "completed")
+(define-constant PENDING "pending")
 
 ;; Data Variables
 (define-data-var dao-admin principal tx-sender)
-(define-data-var min-reputation uint u50)
-(define-data-var maintenance-threshold uint u80)
+(define-data-var current-job-id uint u0)
 
-;; Data Maps
-(define-map assets 
+;; IoT Sensor Thresholds
+(define-data-var critical-threshold uint u80)  ;; Percentage threshold for immediate maintenance
+(define-data-var warning-threshold uint u60)   ;; Percentage threshold for warning
+(define-data-var maintenance-interval uint u1000) ;; Blocks between routine checks
+
+;; Maps for Infrastructure Management
+(define-map infrastructure-assets 
     {id: uint} 
     {
-        name: (string-utf8 100),
-        location: (string-utf8 100),
+        name: (string-ascii 100),
+        location: (string-ascii 100),
         sensor-id: (buff 32),
-        threshold: uint,
+        last-reading: uint,
         last-maintenance: uint,
-        status: (string-utf8 20),
-        owner: principal
+        status: (string-ascii 20),
+        maintenance-count: uint
     }
 )
 
+;; IoT Sensor Data Storage
 (define-map sensor-readings
     {asset-id: uint, timestamp: uint}
     {
-        reading: uint,
-        verified: bool,
-        reported-by: principal
+        reading: uint,         ;; Current sensor reading (percentage of optimal)
+        temperature: uint,     ;; Temperature reading if applicable
+        vibration: uint,      ;; Vibration reading if applicable
+        alert-level: (string-ascii 20)
     }
 )
 
-(define-map contractors
-    {address: principal}
-    {
-        name: (string-utf8 100),
-        reputation: uint,
-        total-jobs: uint,
-        active: bool,
-        stake: uint
-    }
-)
-
+;; Maintenance Jobs
 (define-map maintenance-jobs
     {job-id: uint}
     {
         asset-id: uint,
         contractor: principal,
+        sensor-reading: uint,
         start-time: uint,
-        end-time: uint,
-        status: (string-utf8 20),
+        completion-time: uint,
+        status: (string-ascii 20),
         payment-amount: uint
     }
 )
 
-;; Administrative Functions
-(define-public (set-dao-admin (new-admin principal))
-    (begin
-        (asserts! (is-eq tx-sender (var-get dao-admin)) ERR-NOT-AUTHORIZED)
-        (ok (var-set dao-admin new-admin))))
+;; Core Infrastructure Management Functions
 
-;; Asset Management
+;; Register new infrastructure asset with IoT sensor
 (define-public (register-asset 
     (asset-id uint)
-    (name (string-utf8 100))
-    (location (string-utf8 100))
-    (sensor-id (buff 32))
-    (threshold uint))
-    (let ((caller tx-sender))
-        (asserts! (is-eq caller (var-get dao-admin)) ERR-NOT-AUTHORIZED)
-        (ok (map-set assets
+    (name (string-ascii 100))
+    (location (string-ascii 100))
+    (sensor-id (buff 32)))
+    (begin
+        (asserts! (is-eq tx-sender (var-get dao-admin)) ERR-NOT-AUTHORIZED)
+        (ok (map-set infrastructure-assets
             {id: asset-id}
             {
                 name: name,
                 location: location,
                 sensor-id: sensor-id,
-                threshold: threshold,
+                last-reading: u0,
                 last-maintenance: block-height,
-                status: "active",
-                owner: caller
+                status: ACTIVE,
+                maintenance-count: u0
             }))))
 
-;; Sensor Data Management
+;; Submit IoT sensor reading and trigger maintenance if needed
 (define-public (submit-sensor-reading
     (asset-id uint)
-    (reading uint))
-    (let ((caller tx-sender))
-        (asserts! (is-valid-sensor caller asset-id) ERR-NOT-AUTHORIZED)
-        (ok (map-set sensor-readings
-            {asset-id: asset-id, timestamp: block-height}
-            {
-                reading: reading,
-                verified: false,
-                reported-by: caller
-            }))))
+    (reading uint)
+    (temperature uint)
+    (vibration uint))
+    (let (
+        (asset (unwrap! (get-asset asset-id) ERR-ASSET-NOT-FOUND))
+        (current-time block-height)
+        )
+        (begin
+            ;; Store sensor reading
+            (map-set sensor-readings
+                {asset-id: asset-id, timestamp: current-time}
+                {
+                    reading: reading,
+                    temperature: temperature,
+                    vibration: vibration,
+                    alert-level: (get-alert-level reading)
+                })
+            ;; Check if maintenance is needed
+            (if (>= reading (var-get critical-threshold))
+                (trigger-maintenance asset-id reading)
+                (ok true)))))
 
-;; Maintenance Management
-(define-public (initiate-maintenance
-    (asset-id uint)
-    (contractor principal))
-    (let ((asset (unwrap-panic (get-asset asset-id)))
-          (contractor-data (unwrap-panic (get-contractor contractor))))
-        (asserts! (>= (get reputation contractor-data) (var-get min-reputation)) 
-                 ERR-NOT-AUTHORIZED)
-        (ok (create-maintenance-job asset-id contractor))))
-
-;; Payment Processing
-(define-public (process-payment
-    (job-id uint))
-    (let ((job (unwrap-panic (get-maintenance-job job-id))))
-        (asserts! (is-job-complete job) ERR-INVALID-DATA)
-        (asserts! (verify-job-completion job-id) ERR-INVALID-DATA)
-        (ok (stx-transfer? 
-            (get payment-amount job)
-            tx-sender
-            (get contractor job)))))
+;; Trigger maintenance based on sensor data
+(define-private (trigger-maintenance (asset-id uint) (reading uint))
+    (let (
+        (job-id (+ (var-get current-job-id) u1))
+        )
+        (begin
+            (map-set maintenance-jobs
+                {job-id: job-id}
+                {
+                    asset-id: asset-id,
+                    contractor: (var-get dao-admin),
+                    sensor-reading: reading,
+                    start-time: block-height,
+                    completion-time: u0,
+                    status: PENDING,
+                    payment-amount: u0
+                })
+            (var-set current-job-id job-id)
+            (ok job-id))))
 
 ;; Helper Functions
-(define-private (is-valid-sensor (sensor principal) (asset-id uint))
-    (let ((asset (unwrap-panic (get-asset asset-id))))
-        (is-eq sensor (get owner asset))))
-
-(define-private (is-job-complete (job {
-        asset-id: uint,
-        contractor: principal,
-        start-time: uint,
-        end-time: uint,
-        status: (string-utf8 20),
-        payment-amount: uint
-    }))
-    (and 
-        (is-eq (get status job) "completed")
-        (> (get end-time job) (get start-time job))
-        (> (get payment-amount job) u0)))
-
-(define-private (verify-job-completion (job-id uint))
-    (let ((job (unwrap-panic (get-maintenance-job job-id))))
-        (and
-            (is-eq (get status job) "completed")
-            (>= block-height (+ (get start-time job) u100))  ;; Minimum time check
-            (< block-height (+ (get end-time job) u10000))   ;; Maximum time check
-            (> (get payment-amount job) u0))))
-
-(define-private (create-maintenance-job (asset-id uint) (contractor principal))
-    (let ((job-id (+ (var-get current-job-id) u1)))
-        (map-set maintenance-jobs
-            {job-id: job-id}
-            {
-                asset-id: asset-id,
-                contractor: contractor,
-                start-time: block-height,
-                end-time: u0,
-                status: "initiated",
-                payment-amount: u0
-            })
-        (var-set current-job-id job-id)
-        job-id))
+(define-private (get-alert-level (reading uint))
+    (if (>= reading (var-get critical-threshold))
+        "critical"
+        (if (>= reading (var-get warning-threshold))
+            "warning"
+            "normal")))
 
 ;; Getters
 (define-read-only (get-asset (asset-id uint))
-    (map-get? assets {id: asset-id}))
+    (map-get? infrastructure-assets {id: asset-id}))
 
-(define-read-only (get-contractor (address principal))
-    (map-get? contractors {address: address}))
+(define-read-only (get-latest-reading (asset-id uint))
+    (map-get? sensor-readings 
+        {asset-id: asset-id, timestamp: block-height}))
 
 (define-read-only (get-maintenance-job (job-id uint))
     (map-get? maintenance-jobs {job-id: job-id}))
-
-;; Initialize contract
-(define-data-var current-job-id uint u0)
+    
