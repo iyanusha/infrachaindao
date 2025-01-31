@@ -6,6 +6,8 @@
 (define-constant ERR-ALREADY-REGISTERED (err u409))
 (define-constant ERR-NOT-FOUND (err u404))
 (define-constant ERR-INSUFFICIENT-STAKE (err u403))
+(define-constant ERR-JOB-NOT-FOUND (err u404))
+(define-constant ERR-INVALID-SCORE (err u400))
 
 ;; Constants
 (define-constant MINIMUM-STAKE u1000)  ;; Minimum STX stake required
@@ -94,25 +96,29 @@
     (let (
         (contractor tx-sender)
         (profile (unwrap! (get-contractor-profile contractor) ERR-NOT-FOUND))
+        (job (unwrap! (get-contractor-job contractor job-id) ERR-JOB-NOT-FOUND))
         (old-reputation (get reputation profile))
-        (new-reputation (calculate-new-reputation old-reputation quality-score))
         )
-        (try! (verify-job-completion job-id))
-        (map-set reputation-history
-            {contractor: contractor, job-id: job-id}
-            {
-                old-score: old-reputation,
-                new-score: new-reputation,
-                reason: "Job completion"
-            })
-        (ok (map-set contractor-profiles
-            {address: contractor}
-            (merge profile 
+        (asserts! (and (>= quality-score u0) (<= quality-score u100)) ERR-INVALID-SCORE)
+        (try! (verify-job-completion contractor job-id))
+        (let (
+            (new-reputation (calculate-new-reputation old-reputation quality-score))
+            )
+            (map-set reputation-history
+                {contractor: contractor, job-id: job-id}
                 {
-                    reputation: new-reputation,
-                    total-jobs: (+ (get total-jobs profile) u1),
-                    active-jobs: (- (get active-jobs profile) u1)
-                })))))
+                    old-score: old-reputation,
+                    new-score: new-reputation,
+                    reason: "Job completion"
+                })
+            (ok (map-set contractor-profiles
+                {address: contractor}
+                (merge profile 
+                    {
+                        reputation: new-reputation,
+                        total-jobs: (+ (get total-jobs profile) u1),
+                        active-jobs: (- (get active-jobs profile) u1)
+                    }))))))
 
 ;; Helper Functions
 
@@ -124,9 +130,17 @@
             {contractor: contractor, job-id: job-id}
             {
                 start-time: block-height,
-                asset-id: u0,  ;; Will be set by main contract
+                asset-id: u0,
                 status: "accepted"
             }))))
+
+;; Verify job completion
+(define-private (verify-job-completion (contractor principal) (job-id uint))
+    (let (
+        (job (unwrap! (get-contractor-job contractor job-id) ERR-JOB-NOT-FOUND))
+        )
+        (asserts! (is-eq (get status job) "accepted") ERR-NOT-AUTHORIZED)
+        (ok true)))
 
 ;; Calculate new reputation score
 (define-private (calculate-new-reputation (old-score uint) (quality-score uint))
@@ -135,10 +149,6 @@
         (weighted-new (mul-down quality-score u100)) ;; 10% weight to new score
         )
         (add-down weighted-old weighted-new)))
-
-;; Verify job completion (to be implemented with main contract)
-(define-private (verify-job-completion (job-id uint))
-    (ok true))
 
 ;; Arithmetic helpers
 (define-private (mul-down (a uint) (b uint))
