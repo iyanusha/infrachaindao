@@ -119,14 +119,14 @@
 ;; Update contractor jobs map
 (define-private (update-contractor-jobs (contractor principal) (job-id uint))
     (begin
-        (map-set contractor-jobs
+        (asserts! (is-some (get-contractor-profile contractor)) ERR-NOT-FOUND)
+        (ok (map-set contractor-jobs
             {contractor: contractor, job-id: job-id}
             {
                 start-time: block-height,
                 asset-id: u0,  ;; Will be set by main contract
                 status: "accepted"
-            })
-        (ok true)))
+            }))))
 
 ;; Calculate new reputation score
 (define-private (calculate-new-reputation (old-score uint) (quality-score uint))
@@ -156,4 +156,3 @@
 
 (define-read-only (get-reputation-change (contractor principal) (job-id uint))
     (map-get? reputation-history {contractor: contractor, job-id: job-id}))
-  
