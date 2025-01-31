@@ -104,13 +104,13 @@
                     vibration: vibration,
                     alert-level: (get-alert-level reading)
                 })
-            ;; Check if maintenance is needed
+            ;; Check if maintenance is needed and return job-id or success
             (if (>= reading (var-get critical-threshold))
                 (trigger-maintenance asset-id reading)
-                (ok true)))))
+                (ok u0)))))  ;; Return 0 when no maintenance needed
 
 ;; Trigger maintenance based on sensor data
-(define-private (trigger-maintenance (asset-id uint) (reading uint))
+(define-public (trigger-maintenance (asset-id uint) (reading uint))
     (let (
         (job-id (+ (var-get current-job-id) u1))
         )
@@ -147,4 +147,3 @@
 
 (define-read-only (get-maintenance-job (job-id uint))
     (map-get? maintenance-jobs {job-id: job-id}))
-    
